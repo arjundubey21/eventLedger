@@ -1,9 +1,13 @@
 package com.eventledger.gateway.config;
 
+import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.bulkhead.BulkheadConfig;
+import io.github.resilience4j.bulkhead.BulkheadRegistry;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.core.IntervalFunction;
+import io.github.resilience4j.micrometer.tagged.TaggedBulkheadMetrics;
 import io.github.resilience4j.micrometer.tagged.TaggedCircuitBreakerMetrics;
 import io.github.resilience4j.micrometer.tagged.TaggedRetryMetrics;
 import io.github.resilience4j.retry.Retry;
@@ -83,5 +87,24 @@ public class ResilienceConfig {
         Retry retry = registry.retry(INSTANCE);
         TaggedRetryMetrics.ofRetryRegistry(registry).bindTo(meterRegistry);
         return retry;
+    }
+
+    @Bean
+    public BulkheadRegistry bulkheadRegistry(
+            @Value("${resilience.bulkhead.max-concurrent-calls:25}") int maxConcurrentCalls,
+            @Value("${resilience.bulkhead.max-wait-millis:0}") long maxWaitMillis) {
+
+        BulkheadConfig config = BulkheadConfig.custom()
+                .maxConcurrentCalls(maxConcurrentCalls)
+                .maxWaitDuration(Duration.ofMillis(maxWaitMillis))
+                .build();
+        return BulkheadRegistry.of(config);
+    }
+
+    @Bean
+    public Bulkhead accountServiceBulkhead(BulkheadRegistry registry, MeterRegistry meterRegistry) {
+        Bulkhead bulkhead = registry.bulkhead(INSTANCE);
+        TaggedBulkheadMetrics.ofBulkheadRegistry(registry).bindTo(meterRegistry);
+        return bulkhead;
     }
 }

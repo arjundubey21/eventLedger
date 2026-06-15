@@ -1,6 +1,9 @@
 spring:
   application:
     name: event-gateway
+  threads:
+    virtual:
+      enabled: true   # Java 21 virtual threads: better throughput for I/O-bound request handling
   datasource:
     url: jdbc:h2:mem:gatewaydb;DB_CLOSE_DELAY=-1
     driver-class-name: org.h2.Driver
@@ -31,6 +34,9 @@ resilience:
     max-attempts: 3
     initial-backoff-millis: 200
     backoff-multiplier: 2.0
+  bulkhead:
+    max-concurrent-calls: 25
+    max-wait-millis: 0
 
 # JSON (ECS) logs; the traceId set by TraceFilter (in the MDC) is included automatically.
 logging:

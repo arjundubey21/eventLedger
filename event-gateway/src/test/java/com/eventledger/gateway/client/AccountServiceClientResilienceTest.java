@@ -1,6 +1,7 @@
 package com.eventledger.gateway.client;
 
 import com.eventledger.gateway.model.TransactionType;
+import io.github.resilience4j.bulkhead.Bulkhead;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.retry.Retry;
@@ -32,6 +33,8 @@ class AccountServiceClientResilienceTest {
     private static final AccountTransactionRequest TX = new AccountTransactionRequest(
             "evt-1", TransactionType.CREDIT, new BigDecimal("10.00"), "USD", Instant.parse("2026-05-15T10:00:00Z"));
 
+    private final Bulkhead bulkhead = Bulkhead.ofDefaults("test");
+
     private CircuitBreaker circuitBreaker(int windowSize) {
         return CircuitBreaker.of("test", CircuitBreakerConfig.custom()
                 .slidingWindowType(CircuitBreakerConfig.SlidingWindowType.COUNT_BASED)
@@ -54,7 +57,7 @@ class AccountServiceClientResilienceTest {
         // Retry disabled so each call counts once against the breaker.
         Retry noRetry = Retry.of("test", RetryConfig.custom().maxAttempts(1).build());
         CircuitBreaker cb = circuitBreaker(3);
-        AccountServiceClient client = new AccountServiceClient(restClient, cb, noRetry);
+        AccountServiceClient client = new AccountServiceClient(restClient, cb, noRetry, bulkhead);
 
         // First 3 calls hit the (failing) service and trip the breaker.
         for (int i = 0; i < 3; i++) {
@@ -86,10 +89,46 @@ class AccountServiceClientResilienceTest {
                 .waitDuration(Duration.ofMillis(10))
                 .retryExceptions(HttpServerErrorException.class, ResourceAccessException.class)
                 .build());
-        AccountServiceClient client = new AccountServiceClient(restClient, circuitBreaker(10), retry);
+        AccountServiceClient client = new AccountServiceClient(restClient, circuitBreaker(10), retry, bulkhead);
 
         // Should not throw: the third attempt succeeds.
         client.applyTransaction("acct-retry", TX);
         server.verify();
+    }
+
+    @Test
+    void circuitBreakerRecoversToClosedAfterCooldown() throws InterruptedException {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        RestClient restClient = builder.baseUrl("http://account-service").build();
+        // First 3 calls fail (trip the breaker); afterwards the service is healthy again.
+        server.expect(ExpectedCount.times(3), requestTo(containsString("/transactions")))
+                .andRespond(withServerError());
+        server.expect(ExpectedCount.manyTimes(), requestTo(containsString("/transactions")))
+                .andRespond(withSuccess());
+
+        CircuitBreaker cb = CircuitBreaker.of("recover", CircuitBreakerConfig.custom()
+                .slidingWindowType(CircuitBreakerConfig.SlidingWindowType.COUNT_BASED)
+                .slidingWindowSize(3)
+                .minimumNumberOfCalls(3)
+                .failureRateThreshold(50)
+                .waitDurationInOpenState(Duration.ofMillis(200))
+                .permittedNumberOfCallsInHalfOpenState(1)
+                .automaticTransitionFromOpenToHalfOpenEnabled(true)
+                .recordExceptions(ResourceAccessException.class, HttpServerErrorException.class)
+                .build());
+        Retry noRetry = Retry.of("test", RetryConfig.custom().maxAttempts(1).build());
+        AccountServiceClient client = new AccountServiceClient(restClient, cb, noRetry, bulkhead);
+
+        for (int i = 0; i < 3; i++) {
+            assertThatThrownBy(() -> client.applyTransaction("acct-recover", TX))
+                    .isInstanceOf(AccountServiceUnavailableException.class);
+        }
+        assertThat(cb.getState()).isEqualTo(CircuitBreaker.State.OPEN);
+
+        // After the cooldown the breaker probes (half-open); a successful call closes it again.
+        Thread.sleep(350);
+        client.applyTransaction("acct-recover", TX);
+        assertThat(cb.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
     }
 }

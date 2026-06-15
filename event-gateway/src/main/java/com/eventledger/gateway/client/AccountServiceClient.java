@@ -1,5 +1,7 @@
 package com.eventledger.gateway.client;
 
+import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.bulkhead.BulkheadFullException;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.retry.Retry;
@@ -21,6 +23,8 @@ import java.util.function.Supplier;
  *       bounded number of times.</li>
  *   <li><b>Circuit breaker</b> — if the Account Service keeps failing, the breaker opens and calls
  *       fail fast with a 503 instead of piling up.</li>
+ *   <li><b>Bulkhead</b> — caps concurrent in-flight calls so a slow downstream can't exhaust the
+ *       Gateway's request threads; excess calls fail fast with a 503.</li>
  * </ol>
  *
  * The trace id is propagated to the Account Service via the {@code X-Trace-Id} header, added by the
@@ -34,13 +38,16 @@ public class AccountServiceClient {
     private final RestClient restClient;
     private final CircuitBreaker circuitBreaker;
     private final Retry retry;
+    private final Bulkhead bulkhead;
 
     public AccountServiceClient(RestClient accountServiceRestClient,
                                 CircuitBreaker accountServiceCircuitBreaker,
-                                Retry accountServiceRetry) {
+                                Retry accountServiceRetry,
+                                Bulkhead accountServiceBulkhead) {
         this.restClient = accountServiceRestClient;
         this.circuitBreaker = accountServiceCircuitBreaker;
         this.retry = accountServiceRetry;
+        this.bulkhead = accountServiceBulkhead;
     }
 
     /** Applies a transaction. Returns normally on success; throws on unavailability. */
@@ -61,10 +68,17 @@ public class AccountServiceClient {
     }
 
     private <T> T execute(Supplier<T> action) {
+        // Bulkhead innermost (limits concurrency), circuit breaker around it (records failures),
+        // retry outermost (re-attempts transient errors).
         Supplier<T> decorated = Retry.decorateSupplier(retry,
-                CircuitBreaker.decorateSupplier(circuitBreaker, action));
+                CircuitBreaker.decorateSupplier(circuitBreaker,
+                        Bulkhead.decorateSupplier(bulkhead, action)));
         try {
             return decorated.get();
+        } catch (BulkheadFullException e) {
+            log.warn("Account Service bulkhead is full; shedding load");
+            throw new AccountServiceUnavailableException(
+                    "Account Service is overloaded (bulkhead full)", e);
         } catch (CallNotPermittedException e) {
             log.warn("Account Service circuit breaker is OPEN; failing fast");
             throw new AccountServiceUnavailableException(

@@ -1,6 +1,9 @@
 spring:
   application:
     name: account-service
+  threads:
+    virtual:
+      enabled: true   # Java 21 virtual threads: better throughput for I/O-bound request handling
   datasource:
     url: jdbc:h2:mem:accountdb;DB_CLOSE_DELAY=-1
     driver-class-name: org.h2.Driver

@@ -52,7 +52,14 @@
             <artifactId>resilience4j-retry</artifactId>
             <version>${resilience4j.version}</version>
         </dependency>
-        <!-- Binds Resilience4j circuit-breaker / retry metrics into Micrometer. -->
+        <!-- Bulkhead: caps concurrent calls to the Account Service so a slow downstream can't
+             exhaust the Gateway's request threads under load. -->
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-bulkhead</artifactId>
+            <version>${resilience4j.version}</version>
+        </dependency>
+        <!-- Binds Resilience4j circuit-breaker / retry / bulkhead metrics into Micrometer. -->
         <dependency>
             <groupId>io.github.resilience4j</groupId>
             <artifactId>resilience4j-micrometer</artifactId>
