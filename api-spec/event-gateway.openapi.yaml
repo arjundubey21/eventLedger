@@ -1,0 +1,198 @@
+openapi: 3.1.0
+info:
+  title: Event Gateway API
+  version: 1.0.0
+  description: >
+    Public-facing API of the Event Ledger system. Ingests transaction events, enforces idempotency
+    on `eventId`, stores them durably, and forwards them to the internal Account Service. Read
+    endpoints are served from the Gateway's local store and remain available even when the Account
+    Service is down.
+servers:
+  - url: http://localhost:8080
+    description: Local
+
+paths:
+  /events:
+    post:
+      summary: Submit a transaction event
+      description: >
+        Idempotent on `eventId`. A new event returns 201; a replay of an already-applied event
+        returns 200. Replaying the same `eventId` with a different payload returns 409. If the
+        Account Service is unavailable the event is stored as PENDING and 503 is returned.
+      operationId: submitEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventRequest' }
+      responses:
+        '201':
+          description: Event accepted and applied
+          headers:
+            Location: { schema: { type: string }, description: URI of the created event }
+            X-Trace-Id: { schema: { type: string }, description: Correlation id for this request }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventResponse' }
+        '200':
+          description: Duplicate event (idempotent replay) — original returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventResponse' }
+        '400':
+          description: Validation error (missing field, non-positive amount, unknown type)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+        '409':
+          description: Same eventId already exists with a different payload
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+        '503':
+          description: Account Service unavailable (event stored as PENDING)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+
+  /events/{id}:
+    get:
+      summary: Retrieve a single event by id
+      description: Served from the Gateway's local store; works even if the Account Service is down.
+      operationId: getEvent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventResponse' }
+        '404':
+          description: No event with that id
+
+  /events?account={accountId}:
+    get:
+      summary: List events for an account
+      description: >
+        Events ordered chronologically by `eventTimestamp`. Paginated (default 50 per page).
+        Served from local data.
+      operationId: listEventsByAccount
+      parameters:
+        - name: account
+          in: query
+          required: true
+          schema: { type: string }
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, default: 0, minimum: 0 }
+        - name: size
+          in: query
+          required: false
+          schema: { type: integer, default: 50, minimum: 1 }
+      responses:
+        '200':
+          description: Events for the account (chronological)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/EventResponse' }
+
+  /accounts/{accountId}/balance:
+    get:
+      summary: Get account balance (proxied to the Account Service)
+      operationId: getBalance
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Current balance
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BalanceResponse' }
+        '503':
+          description: Account Service unreachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+
+  /health:
+    get:
+      summary: Health check
+      operationId: gatewayHealth
+      responses:
+        '200':
+          description: Service healthy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Database unreachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+
+components:
+  schemas:
+    TransactionType:
+      type: string
+      enum: [CREDIT, DEBIT]
+    EventRequest:
+      type: object
+      required: [eventId, accountId, type, amount, currency, eventTimestamp]
+      properties:
+        eventId: { type: string, example: evt-001 }
+        accountId: { type: string, example: acct-123 }
+        type: { $ref: '#/components/schemas/TransactionType' }
+        amount: { type: number, exclusiveMinimum: 0, example: 150.00 }
+        currency: { type: string, example: USD }
+        eventTimestamp: { type: string, format: date-time, example: '2026-05-15T14:02:11Z' }
+        metadata:
+          type: object
+          additionalProperties: true
+          nullable: true
+    EventResponse:
+      type: object
+      properties:
+        eventId: { type: string }
+        accountId: { type: string }
+        type: { $ref: '#/components/schemas/TransactionType' }
+        amount: { type: number }
+        currency: { type: string }
+        eventTimestamp: { type: string, format: date-time }
+        metadata: { type: object, additionalProperties: true, nullable: true }
+        status: { type: string, enum: [PENDING, APPLIED] }
+        receivedAt: { type: string, format: date-time }
+    BalanceResponse:
+      type: object
+      properties:
+        accountId: { type: string }
+        currency: { type: string, nullable: true }
+        balance: { type: number }
+        totalCredits: { type: number }
+        totalDebits: { type: number }
+        transactionCount: { type: integer, format: int64 }
+    ApiError:
+      type: object
+      properties:
+        timestamp: { type: string, format: date-time }
+        status: { type: integer }
+        error: { type: string }
+        message: { type: string }
+        details:
+          type: array
+          items: { type: string }
+    Health:
+      type: object
+      properties:
+        service: { type: string }
+        status: { type: string, enum: [UP, DOWN] }
+        components: { type: object, additionalProperties: true }

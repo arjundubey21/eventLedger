@@ -1,0 +1,166 @@
+openapi: 3.1.0
+info:
+  title: Account Service API
+  version: 1.0.0
+  description: >
+    Internal service of the Event Ledger system. Owns account state — applies transactions
+    idempotently (and safely under concurrency), enforces a single currency per account, and
+    computes balances. Only called by the Event Gateway, not exposed to external clients.
+servers:
+  - url: http://localhost:8081
+    description: Local
+
+paths:
+  /accounts/{accountId}/transactions:
+    post:
+      summary: Apply a transaction to an account
+      description: >
+        Idempotent on `eventId`: a new transaction returns 201, a replay returns 200. A replay with
+        a different payload returns 409, as does a transaction whose currency differs from the
+        account's established currency. The trace id is read from the `X-Trace-Id` header.
+      operationId: applyTransaction
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: X-Trace-Id
+          in: header
+          required: false
+          schema: { type: string }
+          description: Correlation id propagated by the Gateway; echoed on the response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransactionRequest' }
+      responses:
+        '201':
+          description: Transaction applied
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionResponse' }
+        '200':
+          description: Duplicate transaction (idempotent replay)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionResponse' }
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+        '409':
+          description: Payload conflict or currency mismatch
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+
+  /accounts/{accountId}/balance:
+    get:
+      summary: Get the current balance for an account
+      description: Balance = sum(CREDIT) − sum(DEBIT); order-independent.
+      operationId: getBalance
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Current balance
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BalanceResponse' }
+
+  /accounts/{accountId}:
+    get:
+      summary: Get account details and transaction history
+      description: Transaction history ordered chronologically by `eventTimestamp`.
+      operationId: getAccount
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Account details
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountDetailsResponse' }
+
+  /health:
+    get:
+      summary: Health check
+      operationId: accountHealth
+      responses:
+        '200':
+          description: Service healthy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Database unreachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+
+components:
+  schemas:
+    TransactionType:
+      type: string
+      enum: [CREDIT, DEBIT]
+    TransactionRequest:
+      type: object
+      required: [eventId, type, amount, currency, eventTimestamp]
+      properties:
+        eventId: { type: string, example: evt-001 }
+        type: { $ref: '#/components/schemas/TransactionType' }
+        amount: { type: number, exclusiveMinimum: 0, example: 150.00 }
+        currency: { type: string, example: USD }
+        eventTimestamp: { type: string, format: date-time, example: '2026-05-15T14:02:11Z' }
+    TransactionResponse:
+      type: object
+      properties:
+        eventId: { type: string }
+        accountId: { type: string }
+        type: { $ref: '#/components/schemas/TransactionType' }
+        amount: { type: number }
+        currency: { type: string }
+        eventTimestamp: { type: string, format: date-time }
+        appliedAt: { type: string, format: date-time }
+    BalanceResponse:
+      type: object
+      properties:
+        accountId: { type: string }
+        currency: { type: string, nullable: true }
+        balance: { type: number }
+        totalCredits: { type: number }
+        totalDebits: { type: number }
+        transactionCount: { type: integer, format: int64 }
+    AccountDetailsResponse:
+      type: object
+      properties:
+        accountId: { type: string }
+        balance: { type: number }
+        transactionCount: { type: integer, format: int64 }
+        transactions:
+          type: array
+          items: { $ref: '#/components/schemas/TransactionResponse' }
+    ApiError:
+      type: object
+      properties:
+        timestamp: { type: string, format: date-time }
+        status: { type: integer }
+        error: { type: string }
+        message: { type: string }
+        details:
+          type: array
+          items: { type: string }
+    Health:
+      type: object
+      properties:
+        service: { type: string }
+        status: { type: string, enum: [UP, DOWN] }
+        components: { type: object, additionalProperties: true }
