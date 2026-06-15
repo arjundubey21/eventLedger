@@ -1,0 +1,53 @@
+spring:
+  application:
+    name: event-gateway
+  datasource:
+    url: jdbc:h2:mem:gatewaydb;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+server:
+  port: 8080
+
+# Address of the internal Account Service. Overridden in docker-compose via env var.
+account-service:
+  base-url: ${ACCOUNT_SERVICE_BASE_URL:http://localhost:8081}
+  connect-timeout-millis: 1000
+  read-timeout-millis: 2000
+
+# Resiliency tuning for the Account Service call (see ResilienceConfig).
+resilience:
+  cb:
+    sliding-window-size: 5
+    minimum-calls: 3
+    failure-rate-threshold: 50
+    wait-duration-seconds: 5
+  retry:
+    max-attempts: 3
+    initial-backoff-millis: 200
+    backoff-multiplier: 2.0
+
+# JSON (ECS) logs; trace.id / span.id injected automatically by Micrometer Tracing.
+logging:
+  structured:
+    format:
+      console: ecs
+  level:
+    com.eventledger: INFO
+
+management:
+  tracing:
+    sampling:
+      probability: 1.0
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  endpoint:
+    health:
+      show-details: always

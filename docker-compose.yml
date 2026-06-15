@@ -1,0 +1,43 @@
+services:
+  account-service:
+    build:
+      context: .
+      dockerfile: account-service/Dockerfile
+    image: event-ledger/account-service:1.0.0
+    ports:
+      - "8081:8081"
+    healthcheck:
+      # JRE image has no curl/wget; use a bash /dev/tcp port probe instead.
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/8081' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    networks:
+      - ledger
+
+  event-gateway:
+    build:
+      context: .
+      dockerfile: event-gateway/Dockerfile
+    image: event-ledger/event-gateway:1.0.0
+    ports:
+      - "8080:8080"
+    environment:
+      # Reach the Account Service by its compose service name on the shared network.
+      ACCOUNT_SERVICE_BASE_URL: "http://account-service:8081"
+    depends_on:
+      account-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/8080' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    networks:
+      - ledger
+
+networks:
+  ledger:
+    driver: bridge

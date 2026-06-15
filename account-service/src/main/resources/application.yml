@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: account-service
+  datasource:
+    url: jdbc:h2:mem:accountdb;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: false
+  h2:
+    console:
+      enabled: false
+
+server:
+  port: 8081
+
+# Emit logs as JSON (Elastic Common Schema). Trace and span IDs are injected automatically
+# by Micrometer Tracing and appear as trace.id / span.id in each log line.
+logging:
+  structured:
+    format:
+      console: ecs
+  level:
+    com.eventledger: INFO
+
+# Distributed tracing: sample every request so each call is traceable end-to-end.
+management:
+  tracing:
+    sampling:
+      probability: 1.0
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  endpoint:
+    health:
+      show-details: always
