@@ -1,6 +1,5 @@
 package com.eventledger.account.web;
 
-import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -27,10 +26,10 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiError> handleUnreadable(HttpMessageNotReadableException ex) {
         String message = "Malformed request body";
-        if (ex.getCause() instanceof InvalidFormatException ife
-                && ife.getTargetType() != null && ife.getTargetType().isEnum()) {
-            message = "Invalid value '" + ife.getValue() + "' for field of type "
-                    + ife.getTargetType().getSimpleName();
+        Throwable cause = ex.getMostSpecificCause();
+        if (cause != null && cause.getMessage() != null
+                && cause.getMessage().contains("TransactionType")) {
+            message = "Invalid 'type'. Allowed values: CREDIT, DEBIT";
         }
         return build(HttpStatus.BAD_REQUEST, message, List.of());
     }
