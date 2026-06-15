@@ -104,20 +104,20 @@ Response codes for `POST /events`: **201** for a new event, **200** for an idemp
 
 ## Distributed tracing
 
-Tracing uses **Micrometer Tracing with the OpenTelemetry bridge**.
+Tracing is a dependency-light implementation built around a servlet filter and the SLF4J MDC (see `DESIGN.md` for why this was chosen over the full OpenTelemetry stack on Spring Boot 4).
 
-- A trace ID is generated at the Gateway for each incoming request.
-- It is propagated to the Account Service over the standard **W3C `traceparent`** header — the `RestClient` is built from Spring's auto-configured, observation-instrumented builder, so propagation is automatic.
-- Both services include `trace.id` and `span.id` in their structured logs.
-- Sampling is set to `1.0` so every request is traceable end-to-end.
+- A trace ID is generated at the Gateway for each incoming request (a `TraceFilter`), or reused if an `X-Trace-Id` header is already present.
+- It is propagated to the Account Service via the **`X-Trace-Id`** header, added by a `RestClient` request interceptor.
+- Both services store the trace ID in the MDC, so it appears in their structured JSON logs, and echo it on the response.
+- A single client request therefore produces one correlated trace ID across both services and their logs.
 
-`GatewayIntegrationTest#traceContextIsPropagatedToAccountService` asserts that a valid `traceparent` header reaches the downstream service.
+`GatewayIntegrationTest#traceContextIsPropagatedToAccountService` asserts that the `X-Trace-Id` header reaches the downstream service.
 
 ---
 
 ## Observability
 
-**Structured logging.** Both services log JSON (Elastic Common Schema) to the console, including timestamp, level, service name, and trace/span IDs (`logging.structured.format.console: ecs`).
+**Structured logging.** Both services log JSON (Elastic Common Schema) to the console, including timestamp, level, service name, and the trace ID (from the MDC) (`logging.structured.format.console: ecs`).
 
 **Health.** `GET /health` on each service returns overall status plus database connectivity. The Gateway's health reflects only its own database, so it stays `UP` when the Account Service is down (Account reachability is reported as an informational component). Spring Actuator's `/actuator/health` is also available.
 
@@ -185,7 +185,7 @@ Coverage:
 
 - **Core** — idempotency, out-of-order ordering, balance correctness, validation (`AccountIntegrationTest`, `EventGatewayServiceTest`, `EventControllerWebTest`).
 - **Resiliency** — simulated Account Service failures verifying the circuit breaker opens and that retries recover from transient errors (`AccountServiceClientResilienceTest`).
-- **Trace propagation** — asserts a W3C `traceparent` header flows Gateway → Account Service (`GatewayIntegrationTest`).
+- **Trace propagation** — asserts the `X-Trace-Id` header flows Gateway → Account Service (`GatewayIntegrationTest`).
 - **Integration** — full `POST /events` → Account Service flow, plus graceful-degradation reads when the downstream is down (`GatewayIntegrationTest`).
 
 ---
@@ -194,4 +194,4 @@ Coverage:
 
 - **In-memory H2** means state resets on restart, which suits the exercise. The `PENDING` event design means a real deployment could add a background reconciler to retry pending events automatically rather than waiting for a client re-submit.
 - Both services use their **own** database; there is no shared persistence or in-process coupling.
-- No OpenTelemetry collector is wired in — trace IDs are generated, propagated, and logged, which satisfies the tracing requirement without external infrastructure. A collector/exporter could be added via configuration only.
+- Tracing is intentionally dependency-light (trace IDs generated, propagated via `X-Trace-Id`, and logged) rather than a full OpenTelemetry stack — see `DESIGN.md` for the rationale. OTLP export could be added later via `spring-boot-starter-opentelemetry`.
