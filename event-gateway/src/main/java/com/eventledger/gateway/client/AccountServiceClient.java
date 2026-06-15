@@ -23,8 +23,8 @@ import java.util.function.Supplier;
  *       fail fast with a 503 instead of piling up.</li>
  * </ol>
  *
- * The trace context (W3C {@code traceparent} header) is propagated automatically because the
- * {@link RestClient} is built from the auto-configured, observation-instrumented builder.
+ * The trace id is propagated to the Account Service via the {@code X-Trace-Id} header, added by the
+ * RestClient request interceptor configured in {@code RestClientConfig}.
  */
 @Component
 public class AccountServiceClient {

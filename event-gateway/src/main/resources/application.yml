@@ -32,7 +32,7 @@ resilience:
     initial-backoff-millis: 200
     backoff-multiplier: 2.0
 
-# JSON (ECS) logs; trace.id / span.id injected automatically by Micrometer Tracing.
+# JSON (ECS) logs; the traceId set by TraceFilter (in the MDC) is included automatically.
 logging:
   structured:
     format:
@@ -41,9 +41,6 @@ logging:
     com.eventledger: INFO
 
 management:
-  tracing:
-    sampling:
-      probability: 1.0
   endpoints:
     web:
       exposure:

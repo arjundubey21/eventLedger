@@ -59,12 +59,6 @@
             <version>${resilience4j.version}</version>
         </dependency>
 
-        <!-- Distributed tracing: Micrometer Tracing with OpenTelemetry bridge.
-             Propagates the W3C traceparent header to the Account Service. -->
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-tracing-bridge-otel</artifactId>
-        </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
@@ -74,6 +68,13 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Spring Boot 4 modularized the web-MVC test slices (@WebMvcTest, @AutoConfigureMockMvc)
+             into this dedicated starter. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

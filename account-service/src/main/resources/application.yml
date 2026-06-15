@@ -20,8 +20,8 @@ spring:
 server:
   port: 8081
 
-# Emit logs as JSON (Elastic Common Schema). Trace and span IDs are injected automatically
-# by Micrometer Tracing and appear as trace.id / span.id in each log line.
+# Emit logs as JSON (Elastic Common Schema). The traceId set by TraceFilter (in the MDC)
+# is included automatically in each log line.
 logging:
   structured:
     format:
@@ -29,11 +29,7 @@ logging:
   level:
     com.eventledger: INFO
 
-# Distributed tracing: sample every request so each call is traceable end-to-end.
 management:
-  tracing:
-    sampling:
-      probability: 1.0
   endpoints:
     web:
       exposure:
