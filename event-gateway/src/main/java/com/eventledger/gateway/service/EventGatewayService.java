@@ -2,6 +2,7 @@ package com.eventledger.gateway.service;
 
 import com.eventledger.gateway.client.AccountBalance;
 import com.eventledger.gateway.client.AccountServiceClient;
+import com.eventledger.gateway.client.AccountServiceUnavailableException;
 import com.eventledger.gateway.client.AccountTransactionRequest;
 import com.eventledger.gateway.dto.EventRequest;
 import com.eventledger.gateway.dto.EventResponse;
@@ -12,6 +13,8 @@ import com.eventledger.gateway.repository.EventRecordRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -50,26 +53,23 @@ public class EventGatewayService {
      */
     public ProcessResult process(EventRequest request) {
         Optional<EventRecord> existing = repository.findById(request.eventId());
-
         if (existing.isPresent()) {
-            EventRecord record = existing.get();
-            if (record.getStatus() == EventStatus.APPLIED) {
-                log.info("Duplicate event ignored: eventId={} accountId={}",
-                        record.getEventId(), record.getAccountId());
-                count(request, "duplicate");
-                return new ProcessResult(EventResponse.from(record), false);
-            }
-            // Previously received but not yet applied (downstream was down). Try again now.
-            log.info("Re-processing pending event: eventId={}", record.getEventId());
-            applyDownstream(record);
-            return new ProcessResult(EventResponse.from(record), false);
+            return handleExisting(existing.get(), request);
         }
 
-        // New event: persist as PENDING first so it survives a downstream outage.
-        EventRecord record = repository.save(new EventRecord(
-                request.eventId(), request.accountId(), request.type(), request.amount(),
-                request.currency(), request.eventTimestamp(), request.metadata(),
-                EventStatus.PENDING, clock.instant()));
+        // New event: persist as PENDING first so it survives a downstream outage. The eventId
+        // primary key makes this insert the single source of truth under concurrency.
+        EventRecord record;
+        try {
+            record = repository.saveAndFlush(new EventRecord(
+                    request.eventId(), request.accountId(), request.type(), request.amount(),
+                    request.currency(), request.eventTimestamp(), request.metadata(),
+                    EventStatus.PENDING, clock.instant()));
+        } catch (DataIntegrityViolationException raced) {
+            // A concurrent request created the same eventId first; resolve to that record.
+            EventRecord winner = repository.findById(request.eventId()).orElseThrow(() -> raced);
+            return handleExisting(winner, request);
+        }
         log.info("Event received: eventId={} accountId={} type={} amount={}",
                 record.getEventId(), record.getAccountId(), record.getType(), record.getAmount());
 
@@ -78,9 +78,37 @@ public class EventGatewayService {
         return new ProcessResult(EventResponse.from(record), true);
     }
 
+    /** Resolves a submission whose eventId already exists: replay (idempotent) or conflict. */
+    private ProcessResult handleExisting(EventRecord record, EventRequest request) {
+        assertSamePayload(record, request);
+        if (record.getStatus() == EventStatus.APPLIED) {
+            log.info("Duplicate event ignored: eventId={} accountId={}",
+                    record.getEventId(), record.getAccountId());
+            count(request, "duplicate");
+            return new ProcessResult(EventResponse.from(record), false);
+        }
+        // Previously received but not yet applied (downstream was down). Try again now.
+        log.info("Re-processing pending event: eventId={}", record.getEventId());
+        applyDownstream(record);
+        return new ProcessResult(EventResponse.from(record), false);
+    }
+
+    private void assertSamePayload(EventRecord record, EventRequest request) {
+        boolean same = record.getAccountId().equals(request.accountId())
+                && record.getType() == request.type()
+                && record.getAmount().compareTo(request.amount()) == 0
+                && record.getCurrency().equals(request.currency())
+                && record.getEventTimestamp().equals(request.eventTimestamp());
+        if (!same) {
+            throw new EventConflictException("eventId " + record.getEventId()
+                    + " already exists with a different payload");
+        }
+    }
+
     /**
      * Calls the Account Service to apply the transaction and marks the event APPLIED on success.
-     * If the service is unavailable, the resilient client throws and the event stays PENDING.
+     * If the service is unavailable, the resilient client throws {@link AccountServiceUnavailableException}
+     * and the event stays PENDING for a later retry. Other errors (e.g. a downstream 4xx) propagate.
      */
     private void applyDownstream(EventRecord record) {
         try {
@@ -90,7 +118,7 @@ public class EventGatewayService {
             record.setStatus(EventStatus.APPLIED);
             repository.save(record);
             log.info("Event applied downstream: eventId={}", record.getEventId());
-        } catch (RuntimeException e) {
+        } catch (AccountServiceUnavailableException e) {
             meterRegistry.counter("gateway.events.processed",
                     "type", record.getType().name(), "outcome", "degraded").increment();
             log.warn("Event stored but not applied (Account Service unavailable): eventId={}",
@@ -103,8 +131,8 @@ public class EventGatewayService {
         return repository.findById(eventId).map(EventResponse::from);
     }
 
-    public List<EventResponse> getEventsForAccount(String accountId) {
-        return repository.findByAccountIdOrderByEventTimestampAsc(accountId).stream()
+    public List<EventResponse> getEventsForAccount(String accountId, Pageable pageable) {
+        return repository.findByAccountIdOrderByEventTimestampAsc(accountId, pageable).stream()
                 .map(EventResponse::from)
                 .toList();
     }

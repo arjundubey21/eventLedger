@@ -11,12 +11,14 @@ import com.eventledger.account.repository.TransactionRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.util.List;
+import java.util.Optional;
 
 @Service
 public class AccountService {
@@ -34,27 +36,60 @@ public class AccountService {
     }
 
     /**
-     * Applies a transaction idempotently. If a transaction with the same {@code eventId} already
-     * exists, the existing record is returned unchanged and the balance is not affected.
+     * Applies a transaction idempotently and safely under concurrency.
+     *
+     * <p>If a transaction with the same {@code eventId} already exists, the existing record is
+     * returned unchanged and the balance is not affected (a payload mismatch yields a 409). The
+     * insert is guarded by the {@code eventId} primary key: if two concurrent requests race past the
+     * existence check, the loser catches the {@link DataIntegrityViolationException} and resolves to
+     * the winner's record instead of failing with a 500. An account is single-currency.
+     *
+     * <p>Not wrapped in a single {@code @Transactional} method on purpose: that lets the failed
+     * insert roll back in isolation so the subsequent re-read can still run.
      */
-    @Transactional
     public ApplyResult applyTransaction(String accountId, TransactionRequest request) {
-        return repository.findById(request.eventId())
-                .map(existing -> {
-                    log.info("Duplicate transaction ignored: eventId={} accountId={}",
-                            existing.getEventId(), accountId);
-                    countApplied(request.type(), "duplicate");
-                    return new ApplyResult(TransactionResponse.from(existing), false);
-                })
-                .orElseGet(() -> {
-                    Transaction saved = repository.save(new Transaction(
-                            request.eventId(), accountId, request.type(), request.amount(),
-                            request.currency(), request.eventTimestamp(), clock.instant()));
-                    log.info("Transaction applied: eventId={} accountId={} type={} amount={}",
-                            saved.getEventId(), accountId, saved.getType(), saved.getAmount());
-                    countApplied(request.type(), "applied");
-                    return new ApplyResult(TransactionResponse.from(saved), true);
-                });
+        Optional<Transaction> existing = repository.findById(request.eventId());
+        if (existing.isPresent()) {
+            return duplicate(existing.get(), accountId, request);
+        }
+
+        repository.findFirstByAccountId(accountId).ifPresent(t -> {
+            if (!t.getCurrency().equals(request.currency())) {
+                throw new ConflictException("Account " + accountId + " is denominated in "
+                        + t.getCurrency() + "; cannot apply a " + request.currency() + " transaction");
+            }
+        });
+
+        try {
+            Transaction saved = repository.saveAndFlush(new Transaction(
+                    request.eventId(), accountId, request.type(), request.amount(),
+                    request.currency(), request.eventTimestamp(), clock.instant()));
+            log.info("Transaction applied: eventId={} accountId={} type={} amount={}",
+                    saved.getEventId(), accountId, saved.getType(), saved.getAmount());
+            countApplied(request.type(), "applied");
+            return new ApplyResult(TransactionResponse.from(saved), true);
+        } catch (DataIntegrityViolationException raced) {
+            // Concurrent insert of the same eventId won; treat this call as a duplicate.
+            Transaction now = repository.findById(request.eventId()).orElseThrow(() -> raced);
+            return duplicate(now, accountId, request);
+        }
+    }
+
+    private ApplyResult duplicate(Transaction existing, String accountId, TransactionRequest request) {
+        assertSamePayload(existing, request);
+        log.info("Duplicate transaction ignored: eventId={} accountId={}", existing.getEventId(), accountId);
+        countApplied(request.type(), "duplicate");
+        return new ApplyResult(TransactionResponse.from(existing), false);
+    }
+
+    private void assertSamePayload(Transaction existing, TransactionRequest request) {
+        boolean same = existing.getType() == request.type()
+                && existing.getAmount().compareTo(request.amount()) == 0
+                && existing.getCurrency().equals(request.currency());
+        if (!same) {
+            throw new ConflictException("eventId " + existing.getEventId()
+                    + " already exists with a different payload");
+        }
     }
 
     @Transactional(readOnly = true)
@@ -63,9 +98,11 @@ public class AccountService {
         BigDecimal debits = repository.sumAmountByType(accountId, TransactionType.DEBIT);
         long count = repository.countByAccountId(accountId);
         BigDecimal balance = credits.subtract(debits);
-        log.info("Balance computed: accountId={} balance={} credits={} debits={}",
-                accountId, balance, credits, debits);
-        return new BalanceResponse(accountId, balance, credits, debits, count);
+        String currency = repository.findFirstByAccountId(accountId)
+                .map(Transaction::getCurrency).orElse(null);
+        log.info("Balance computed: accountId={} currency={} balance={} credits={} debits={}",
+                accountId, currency, balance, credits, debits);
+        return new BalanceResponse(accountId, currency, balance, credits, debits, count);
     }
 
     @Transactional(readOnly = true)

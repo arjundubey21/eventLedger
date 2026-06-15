@@ -5,6 +5,8 @@ import com.eventledger.gateway.dto.EventResponse;
 import com.eventledger.gateway.dto.ProcessResult;
 import com.eventledger.gateway.service.EventGatewayService;
 import jakarta.validation.Valid;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -51,9 +53,14 @@ public class EventController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
-    /** List events for an account, ordered chronologically by event timestamp. Local data only. */
+    /**
+     * List events for an account, ordered chronologically by event timestamp. Local data only.
+     * Paginated (default 50 per page) so a high-volume account can't return an unbounded payload;
+     * override with {@code ?page=&size=}.
+     */
     @GetMapping(params = "account")
-    public List<EventResponse> listByAccount(@RequestParam("account") String accountId) {
-        return service.getEventsForAccount(accountId);
+    public List<EventResponse> listByAccount(@RequestParam("account") String accountId,
+                                             @PageableDefault(size = 50) Pageable pageable) {
+        return service.getEventsForAccount(accountId, pageable);
     }
 }

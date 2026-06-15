@@ -1,12 +1,14 @@
 package com.eventledger.gateway.web;
 
 import com.eventledger.gateway.client.AccountServiceUnavailableException;
+import com.eventledger.gateway.service.EventConflictException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.client.HttpClientErrorException;
 
 import java.time.Instant;
 import java.util.List;
@@ -36,10 +38,26 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_REQUEST, message, List.of());
     }
 
-    /** Account Service unreachable / circuit open -> 503 (not a 500, and no hanging). */
+    /** Account Service unreachable / circuit open / bulkhead full -> 503 (not a 500, no hanging). */
     @ExceptionHandler(AccountServiceUnavailableException.class)
     public ResponseEntity<ApiError> handleUnavailable(AccountServiceUnavailableException ex) {
         return build(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), List.of());
+    }
+
+    /** Same eventId resubmitted with a different payload -> 409. */
+    @ExceptionHandler(EventConflictException.class)
+    public ResponseEntity<ApiError> handleConflict(EventConflictException ex) {
+        return build(HttpStatus.CONFLICT, ex.getMessage(), List.of());
+    }
+
+    /** A 4xx from the Account Service (e.g. a currency conflict) is surfaced with the same status. */
+    @ExceptionHandler(HttpClientErrorException.class)
+    public ResponseEntity<ApiError> handleDownstreamClientError(HttpClientErrorException ex) {
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
+        if (status == null) {
+            status = HttpStatus.BAD_GATEWAY;
+        }
+        return build(status, "Account Service rejected the request: " + ex.getStatusText(), List.of());
     }
 
     @ExceptionHandler(Exception.class)

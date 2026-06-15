@@ -1,5 +1,6 @@
 package com.eventledger.account.web;
 
+import com.eventledger.account.service.ConflictException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -32,6 +33,12 @@ public class GlobalExceptionHandler {
             message = "Invalid 'type'. Allowed values: CREDIT, DEBIT";
         }
         return build(HttpStatus.BAD_REQUEST, message, List.of());
+    }
+
+    /** Duplicate eventId with a different payload, or a currency mismatch -> 409. */
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<ApiError> handleConflict(ConflictException ex) {
+        return build(HttpStatus.CONFLICT, ex.getMessage(), List.of());
     }
 
     @ExceptionHandler(Exception.class)

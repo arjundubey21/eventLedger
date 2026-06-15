@@ -8,10 +8,14 @@ import org.springframework.data.repository.query.Param;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 
 public interface TransactionRepository extends JpaRepository<Transaction, String> {
 
     List<Transaction> findByAccountIdOrderByEventTimestampAsc(String accountId);
+
+    /** Any existing transaction for the account, used to determine the account's currency. */
+    Optional<Transaction> findFirstByAccountId(String accountId);
 
     /**
      * Sum of amounts for an account filtered by transaction type. Returns {@code null} when no rows
