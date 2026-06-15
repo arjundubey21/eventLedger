@@ -1,5 +1,7 @@
 package com.eventledger.gateway;
 
+import com.eventledger.gateway.repository.EventRecordRepository;
+import com.eventledger.gateway.web.TraceFilter;
 import com.sun.net.httpserver.HttpServer;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.junit.jupiter.api.AfterAll;
@@ -7,7 +9,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -37,7 +39,7 @@ class GatewayIntegrationTest {
 
     private static HttpServer stub;
     private static volatile boolean failMode = false;
-    private static volatile String lastTraceparent;
+    private static volatile String lastTraceId;
 
     @Autowired
     private MockMvc mockMvc;
@@ -45,11 +47,14 @@ class GatewayIntegrationTest {
     @Autowired
     private CircuitBreaker accountServiceCircuitBreaker;
 
+    @Autowired
+    private EventRecordRepository repository;
+
     @DynamicPropertySource
     static void accountServiceProps(DynamicPropertyRegistry registry) throws IOException {
         stub = HttpServer.create(new InetSocketAddress(0), 0);
         stub.createContext("/accounts", exchange -> {
-            lastTraceparent = exchange.getRequestHeaders().getFirst("traceparent");
+            lastTraceId = exchange.getRequestHeaders().getFirst(TraceFilter.TRACE_HEADER);
             exchange.getRequestBody().readAllBytes(); // drain
             String path = exchange.getRequestURI().getPath();
             if (failMode) {
@@ -86,8 +91,9 @@ class GatewayIntegrationTest {
     @BeforeEach
     void reset() {
         failMode = false;
-        lastTraceparent = null;
+        lastTraceId = null;
         accountServiceCircuitBreaker.reset();
+        repository.deleteAll(); // isolate each test (no rollback under @SpringBootTest)
     }
 
     @AfterEach
@@ -128,9 +134,10 @@ class GatewayIntegrationTest {
         mockMvc.perform(post("/events").contentType(MediaType.APPLICATION_JSON).content(event("evt-trace", "acct-int")))
                 .andExpect(status().isCreated());
 
-        // The instrumented RestClient must have sent a W3C traceparent header downstream.
-        assertThat(lastTraceparent).isNotNull();
-        assertThat(lastTraceparent).matches("00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}");
+        // The Gateway must have generated a trace id and forwarded it to the Account Service via
+        // the X-Trace-Id header — proving a single request is traceable across both services.
+        assertThat(lastTraceId).isNotNull();
+        assertThat(lastTraceId).matches("[0-9a-f]{32}");
     }
 
     @Test
