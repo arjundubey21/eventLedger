@@ -10,6 +10,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import static org.hamcrest.Matchers.is;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -107,5 +108,38 @@ class AccountIntegrationTest {
                                 {"eventId":"evt-missing","amount":5.00,"currency":"USD","eventTimestamp":"2026-05-15T10:00:00Z"}
                                 """))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void rejectsSameEventIdWithDifferentPayloadWith409() throws Exception {
+        mockMvc.perform(post("/accounts/acct-c/transactions").contentType(MediaType.APPLICATION_JSON)
+                        .content(tx("evt-c1", "CREDIT", "100.00", "2026-05-15T10:00:00Z")))
+                .andExpect(status().isCreated());
+        // Same eventId, different amount -> conflict.
+        mockMvc.perform(post("/accounts/acct-c/transactions").contentType(MediaType.APPLICATION_JSON)
+                        .content(tx("evt-c1", "CREDIT", "200.00", "2026-05-15T10:00:00Z")))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void rejectsCurrencyMismatchForAccountWith409() throws Exception {
+        mockMvc.perform(post("/accounts/acct-cur/transactions").contentType(MediaType.APPLICATION_JSON)
+                        .content(tx("evt-usd", "CREDIT", "100.00", "2026-05-15T10:00:00Z")))
+                .andExpect(status().isCreated());
+        // Different currency on the same account -> conflict (accounts are single-currency).
+        mockMvc.perform(post("/accounts/acct-cur/transactions").contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"eventId":"evt-eur","type":"CREDIT","amount":50.00,"currency":"EUR","eventTimestamp":"2026-05-15T11:00:00Z"}
+                                """))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void echoesTraceIdHeaderForCrossServiceCorrelation() throws Exception {
+        mockMvc.perform(post("/accounts/acct-tr/transactions").contentType(MediaType.APPLICATION_JSON)
+                        .header("X-Trace-Id", "trace-abc-123")
+                        .content(tx("evt-tr", "CREDIT", "10.00", "2026-05-15T10:00:00Z")))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("X-Trace-Id", "trace-abc-123"));
     }
 }

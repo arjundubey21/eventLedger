@@ -14,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -87,7 +88,7 @@ class EventGatewayServiceTest {
         service.process(event("evt-late", "acct-2", TransactionType.DEBIT, "30.00", "2026-05-15T12:00:00Z"));
         service.process(event("evt-early", "acct-2", TransactionType.CREDIT, "100.00", "2026-05-15T08:00:00Z"));
 
-        List<EventResponse> events = service.getEventsForAccount("acct-2");
+        List<EventResponse> events = service.getEventsForAccount("acct-2", Pageable.unpaged());
 
         assertThat(events).extracting(EventResponse::eventId)
                 .containsExactly("evt-early", "evt-late");

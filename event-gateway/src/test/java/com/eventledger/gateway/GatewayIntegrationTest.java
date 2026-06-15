@@ -160,4 +160,18 @@ class GatewayIntegrationTest {
         mockMvc.perform(get("/accounts/acct-int/balance"))
                 .andExpect(status().isServiceUnavailable());
     }
+
+    @Test
+    void sameEventIdWithDifferentPayloadReturns409() throws Exception {
+        mockMvc.perform(post("/events").contentType(MediaType.APPLICATION_JSON).content(event("evt-conflict", "acct-int")))
+                .andExpect(status().isCreated());
+
+        // Same eventId, different amount -> conflict, not a silent overwrite.
+        String differentPayload = """
+                {"eventId":"evt-conflict","accountId":"acct-int","type":"CREDIT","amount":999.00,
+                 "currency":"USD","eventTimestamp":"2026-05-15T14:02:11Z"}
+                """;
+        mockMvc.perform(post("/events").contentType(MediaType.APPLICATION_JSON).content(differentPayload))
+                .andExpect(status().isConflict());
+    }
 }
